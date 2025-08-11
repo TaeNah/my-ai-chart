@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8"/>
@@ -60,7 +60,6 @@
   .exit-table .td-w { color:#53fc18; }
   .exit-table .td-l { color:#f5a623; }
 
-  /* 오늘 7.5 이상 하이라이트 */
   .hl7_5 td { background:#1f2b3f !important; }
   .hl7_5 td:first-child { box-shadow: inset 4px 0 0 #00e5ff; }
   .hl7_5 td:nth-child(4) { color:#00e5ff !important; font-weight:700; }
@@ -68,11 +67,28 @@
 </head>
 <body>
 <script>
+/** ▼▼▼ 여기에 본인 Cloudflare Worker/Vercel/Netlify 프록시 주소 넣기 ▼▼▼ */
+const PROXY_BASE = "https://YOUR-WORKER-NAME.workers.dev";  // 예: https://ai-upbit-proxy.workers.dev
+function upbit(path){ return `${PROXY_BASE}/upbit?path=${encodeURIComponent(path)}`; }
+/** ▲▲▲ 반드시 교체하세요! ▲▲▲ */
+
 document.addEventListener("DOMContentLoaded", function () {
   if (typeof Android !== "undefined" && Android !== null) {
     try { if (window.Android.requestNotificationPermission) Android.requestNotificationPermission(); } catch (e) {}
   }
 });
+
+/* 공통 안전 fetch */
+async function safeJsonFetch(url){
+  try{
+    const r = await fetch(url, { headers: { 'accept':'application/json' }});
+    if(!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return await r.json();
+  }catch(e){
+    console.warn('API 요청 실패:', url, e);
+    return null;
+  }
+}
 </script>
 
 <div class="container">
@@ -142,11 +158,9 @@ const indNames = [
 ];
 let indAcc = Array(22).fill(80);
 
-/* 마지막 렌더 데이터(리사이즈 재그리기용) */
-let lastMini = null;
-let lastBarPayload = null; // {vals, deltas, mddBarIndex, mdd}
+let lastMini=null;
+let lastBarPayload=null;
 
-/* ===== 계산 유틸 ===== */
 function calcRSI(c,p=14){let rsi=[],g=[],l=[];for(let i=1;i<c.length;i++){let d=c[i]-c[i-1];g.push(d>0?d:0);l.push(d<0?-d:0);}let ag=g.slice(0,p).reduce((a,b)=>a+b)/p,al=l.slice(0,p).reduce((a,b)=>a+b)/p;rsi[p]=al===0?100:100-(100/(1+ag/al));for(let i=p+1;i<c.length;i++){ag=(ag*(p-1)+g[i-1])/p;al=(al*(p-1)+l[i-1])/p;rsi[i]=al===0?100:100-(100/(1+ag/al));}return rsi;}
 function calcMACD(c,f=12,s=26,si=9){function ema(a,p){let k=2/(p+1),e=[a.slice(0,p).reduce((x,y)=>x+y)/p];for(let i=1;i<a.length;i++)e[i]=k*(a[i]-e[i-1])+e[i-1];return e;}let fe=ema(c,f),se=ema(c,s),m=[],sg=[],h=[];for(let i=0;i<c.length;i++)m[i]=(fe[i]||0)-(se[i]||0);sg=ema(m,si);for(let i=0;i<c.length;i++)h[i]=(m[i]||0)-(sg[i]||0);return{macd:m,signal:sg,hist:h};}
 function calcADX(h,l,c,p=14){let pd=[],md=[],tr=[];for(let i=1;i<h.length;i++){let up=h[i]-h[i-1],dn=l[i-1]-l[i];pd.push(up>dn&&up>0?up:0);md.push(dn>up&&dn>0?dn:0);tr.push(Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));}function sma(a,pp,i){return a.slice(i-pp+1,i+1).reduce((x,y)=>x+y)/pp;}let pdi=[],mdi=[],dx=[],adx=[];for(let i=p-1;i<pd.length;i++){let sum=sma(tr,p,i),sp=sma(pd,p,i),sm=sma(md,p,i);pdi[i]=100*(sp/sum);mdi[i]=100*(sm/sum);dx[i]=100*Math.abs(pdi[i]-mdi[i])/(pdi[i]+mdi[i]);}for(let i=2*p-2;i<dx.length;i++)adx[i]=dx.slice(i-p+1,i+1).reduce((x,y)=>x+y)/p;return adx;}
@@ -180,7 +194,6 @@ function scale(v, min, max, toMin=0, toMax=10){
   return ((v-min)/(max-min))*(toMax-toMin)+toMin;
 }
 
-/* ===== 캔버스 DPI/폭 맞춤 ===== */
 function fitCanvasToParent(canvas, cssHeightPx){
   const dpr = window.devicePixelRatio || 1;
   canvas.style.width  = '100%';
@@ -194,7 +207,6 @@ function fitCanvasToParent(canvas, cssHeightPx){
   return { ctx, cssW, cssH };
 }
 
-/* ===== 탭/데이터 로드 ===== */
 let currentCoin = "BTC";
 function selectCoin(coin){
   currentCoin = coin;
@@ -206,20 +218,24 @@ async function loadData(){
   const { market, name } = coinMeta[currentCoin];
   document.getElementById('coinTitle').innerText = `${name} 240분봉`;
 
-  // 현재가
-  fetch(`https://api.upbit.com/v1/ticker?markets=${market}`)
-    .then(res=>res.json())
-    .then(data=>{ document.getElementById('currentPrice').innerText = '₩'+data[0].trade_price.toLocaleString(); });
+  // 현재가 (프록시 경유)
+  const ticker = await safeJsonFetch(upbit(`/v1/ticker?markets=${market}`));
+  if (ticker && ticker[0]) {
+    document.getElementById('currentPrice').innerText = '₩' + ticker[0].trade_price.toLocaleString();
+  }
 
-  const res = await fetch(`https://api.upbit.com/v1/candles/minutes/240?market=${market}&count=200`);
-  const candles = (await res.json()).reverse();
+  // 캔들 (프록시 경유)
+  const candlesJson = await safeJsonFetch(upbit(`/v1/candles/minutes/240?market=${market}&count=200`));
+  if (!candlesJson) return; // 실패 시 종료
+  const candles = candlesJson.reverse();
+
   const closes = candles.map(d=>d.trade_price),
         highs  = candles.map(d=>d.high_price),
         lows   = candles.map(d=>d.low_price),
         vols   = candles.map(d=>d.candle_acc_trade_volume),
         n      = closes.length-1;
 
-  // 지표들
+  /* ===== 계산/스코어/전략 (이하 동일) ===== */
   const rsi=calcRSI(closes), macd=calcMACD(closes), adx=calcADX(highs,lows,closes),
         cci=calcCCI(highs,lows,closes), stoch=calcStochastic(highs,lows,closes), dmi=calcDMI(highs,lows,closes),
         obv=calcOBV(closes,vols), mfi=calcMFI(highs,lows,closes,vols), boll=calcBollinger(closes),
@@ -232,7 +248,6 @@ async function loadData(){
   const mins=arrs.map(a=>getAutoScaleRange(a)[0]);
   const maxs=arrs.map(a=>getAutoScaleRange(a)[1]);
 
-  // 정확도 기반 가중치
   let sumAcc=0, newAcc=[];
   for(let i=0;i<22;i++){
     let win=0, tot=0, a=arrs[i];
@@ -243,12 +258,10 @@ async function loadData(){
   }
   indAcc=newAcc; const indWeightsInit=indAcc.map(acc=>acc/sumAcc);
 
-  // 점수들
   const indScores=arrs.map((a,i)=>scale(a[n],mins[i],maxs[i]));
   const aiScore=Math.round(indScores.reduce((s,v,i)=>s+v*indWeightsInit[i],0)*10)/10;
   const aiScoreFinal=Math.max(0,Math.min(10,aiScore));
 
-  // 알림
   if (window.Android && typeof window.Android.showNotification==='function'){
     if(aiScoreFinal>=8.0 && notifiedScore!==aiScoreFinal){
       window.Android.showNotification(`${name} 알림`,`AI 종합 점수 ${aiScoreFinal.toFixed(1)} / 10\n익절 신호 발생!`);
@@ -259,16 +272,12 @@ async function loadData(){
   document.getElementById('aiScoreBar').style.width=(aiScoreFinal*10)+'%';
   document.getElementById('aiScoreNum').innerText=aiScoreFinal.toFixed(1)+' / 10';
 
-  // === 미니 스파크라인 (최근 24개 샘플) ===
-  let mini=[];
-  for(let j=n-23;j<=n;j++){
-    let s=0; for(let k=0;k<22;k++) s+=scale(arrs[k][j],mins[k],maxs[k])*indWeightsInit[k];
-    mini.push(Math.round(s*10)/10);
-  }
+  // 미니 스파크라인(최근 24개)
+  let mini=[]; for(let j=n-23;j<=n;j++){ let s=0; for(let k=0;k<22;k++) s+=scale(arrs[k][j],mins[k],maxs[k])*indWeightsInit[k]; mini.push(Math.round(s*10)/10); }
   lastMini = mini.slice();
   drawSparkline('miniSpark', mini, 6.5);
 
-  // === 전략 코멘트 ===
+  // 전략 코멘트
   let main, desc;
   if (aiScoreFinal >= 7.5) { main='강력한 익절 신호: 전량 매도'; desc=`AI 점수 ${aiScoreFinal.toFixed(1)} 이상에서 전량 매도 권장`; }
   else if (aiScoreFinal >= 7.0) { main='부분 매도: 50% 매도'; desc=`AI 점수 ${aiScoreFinal.toFixed(1)}에서 보유 물량의 절반 매도 권장`; }
@@ -277,7 +286,7 @@ async function loadData(){
   document.getElementById('strategyMain').innerText=main;
   document.getElementById('strategyDesc').innerText=desc;
 
-  // === 백테스트 ===
+  // 백테스트
   let cash=0, coin=0, yields=[], exitLog=[];
   const BUY_AMT=10000; let state='buying', entryPrice=0, wins=0, losses=0, buyAmount=0;
   const scoreArr=closes.map((_,i)=>{ let s=0; for(let k=0;k<22;k++) s+=scale(arrs[k][i],mins[k],maxs[k])*indWeightsInit[k]; return Math.round(s*10)/10; });
@@ -297,12 +306,11 @@ async function loadData(){
   }
   cash += coin*closes[n];
 
-  // 누적 투자액과 누적 수익률(%)
   const buyCount=yields.filter((_,i)=>candles[i].candle_date_time_kst.includes(BUY_TIME_SUFFIX)).length;
   const invested=Math.max(1,buyCount*BUY_AMT);
   const eqCurvePerc=yields.map(v=>(v/invested)*100);
 
-  // ---- MDD 계산(인덱스 포함) ----
+  // MDD
   let peak=-Infinity, mdd=0, mddIndex=-1;
   if(eqCurvePerc.length>0){
     eqCurvePerc.forEach((v,i)=>{
@@ -313,12 +321,9 @@ async function loadData(){
     });
   }
 
-  // 7등분 샘플링(막대값) + MDD 위치를 막대 인덱스로 매핑
+  // 7등분 막대 + MDD 막대 인덱스 매핑
   const step = Math.floor(eqCurvePerc.length/7) || 1;
-  let retPerc=[];
-  for(let i=0;i<eqCurvePerc.length;i+=step){
-    retPerc.push(Math.round(eqCurvePerc[i]*10)/10);
-  }
+  let retPerc=[]; for(let i=0;i<eqCurvePerc.length;i+=step){ retPerc.push(Math.round(eqCurvePerc[i]*10)/10); }
   const deltas=retPerc.map((v,i)=> i===0?0:Math.round((v-retPerc[i-1])*10)/10);
   let mddBarIndex = (mddIndex>=0) ? Math.min(retPerc.length-1, Math.max(0, Math.round(mddIndex/step))) : -1;
 
@@ -331,7 +336,7 @@ async function loadData(){
   lastBarPayload = { vals: retPerc.slice(), deltas: deltas.slice(), mddBarIndex, mdd };
   drawBacktestBar('backtestBar', retPerc, deltas, mddBarIndex, mdd);
 
-  // 날짜별 최고 점수만 남기기(익절)
+  // 날짜별 최고 점수만 남기기
   const exitByDate={};
   exitLog.forEach(e=>{
     const d=e.datetime.substring(0,10);
@@ -341,7 +346,6 @@ async function loadData(){
   const filteredWins=exitFiltered.filter(e=>e.type==='win').length;
   const filteredLoss=exitFiltered.filter(e=>e.type==='loss').length;
 
-  // 출력
   document.getElementById('backtestResult').innerHTML =
     `200봉 전략수익률 <span style="color:#53fc18;">${Number(retPerc.slice(-1)[0]??0).toFixed(1)}%</span><br>`+
     `익절 ${exitFiltered.length}회 (수익:${filteredWins}/손실:${filteredLoss})<br>`+
@@ -353,7 +357,6 @@ async function loadData(){
     `최고 구간: ${(changes.length?((Math.max(...changes)>=0?'+':'')+Math.max(...changes).toFixed(1)):'0.0')}%  ·  `+
     `최저 구간: ${(changes.length?((Math.min(...changes)>=0?'+':'')+Math.min(...changes).toFixed(1)):'0.0')}%`;
 
-  // 오늘 강조 익절표
   const todayKST=new Date().toLocaleString('sv-SE',{timeZone:'Asia/Seoul'}).slice(0,10);
   let exitTableHtml='';
   if(exitFiltered.length>0){
@@ -397,21 +400,17 @@ function drawSparkline(id, data, threshold = 6.5){
   const min=Math.min(...data,0), max=Math.max(...data,10);
   const sx=(w-2*p)/(n-1), sy=(h-2*p)/(max-min||1);
 
-  // 임계선(점선)
   const yThr = h - p - ((threshold - min) * sy);
   ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle="#00e5ff"; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(p,yThr); ctx.lineTo(w-p,yThr); ctx.stroke(); ctx.restore();
 
-  // 라인
   ctx.beginPath(); ctx.moveTo(p, h-p-(data[0]-min)*sy);
   for(let i=1;i<n;i++) ctx.lineTo(p+sx*i, h-p-(data[i]-min)*sy);
   ctx.strokeStyle="#53fc18"; ctx.lineWidth=2; ctx.stroke();
 
-  // 끝점
   ctx.beginPath(); ctx.arc(p+sx*(n-1), h-p-(data[n-1]-min)*sy, 4, 0, Math.PI*2);
   ctx.fillStyle="#ffe089"; ctx.fill();
 
-  // 6.5 이상 마커
   for(let i=0;i<n;i++){
     if(data[i] >= threshold){
       const x=p+sx*i, y=h-p-(data[i]-min)*sy;
@@ -446,46 +445,34 @@ function drawBacktestBar(id, vals, deltas, mddBarIndex, mddValue){
     }
   }
 
-  // --- MDD 지점 표시 (빨간 점 + 라벨) ---
+  // MDD 지점 표시
   if (typeof mddBarIndex === 'number' && mddBarIndex >= 0 && mddBarIndex < n && isFinite(mddValue)) {
     const x = p + mddBarIndex*gap + bw/2;
     const y = h - p - ((vals[mddBarIndex]-min)/(max-min+0.01))*(h-2*p-8);
 
-    // 수직 보조선
     ctx.save();
     ctx.setLineDash([3,3]);
     ctx.strokeStyle="#ff7171";
     ctx.lineWidth=1;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, h-p);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, h-p); ctx.stroke();
     ctx.restore();
 
-    // 포인트
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI*2);
-    ctx.fillStyle="#ff4444";
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2);
+    ctx.fillStyle="#ff4444"; ctx.fill();
 
-    // 라벨
     ctx.font="bold 11px Pretendard";
     ctx.fillStyle="#ffcccb";
-    const label = (mddValue.toFixed(1)) + "%";
-    ctx.fillText(label, x+6, y-6);
+    ctx.fillText(mddValue.toFixed(1) + "%", x+6, y-6);
   }
 }
 
-/* ===== 초기 로드 & 주기 갱신 & 리사이즈 ===== */
+/* ===== 로드/주기/리사이즈 ===== */
 window.onload=function(){ selectCoin("BTC"); };
 setInterval(()=>{ loadData(); },30000);
-
-/* 재페치 없이 리사이즈 시 재그리기 */
 window.addEventListener('resize', ()=>{
   if (lastMini) drawSparkline('miniSpark', lastMini, 6.5);
   if (lastBarPayload) drawBacktestBar('backtestBar', lastBarPayload.vals, lastBarPayload.deltas, lastBarPayload.mddBarIndex, lastBarPayload.mdd);
 });
-
 window.selectCoin=selectCoin;
 </script>
 
